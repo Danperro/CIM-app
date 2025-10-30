@@ -14,12 +14,12 @@ return new class extends Migration
         Schema::create('detallelaboratorio',function(Blueprint $table){
             $table->id('IdDtl');
             $table->bigInteger('IdLab')->unsigned();
-            $table->string('ObservaciónDtl');
             $table->string('RealizadoDtl');
-            $table->string('VerificadoDtl');
+            $table->bigInteger('IdTpm')->unsigned();;
             $table->date('FechaDtl');
             $table->boolean('EstadoDtl');
             $table->foreign('IdLab')->references('IdLab')->on('laboratorio')->onDelete('cascade');
+            $table->foreign('IdTpm')->references('IdTpm')->on('tipomantenimiento')->onDelete('cascade');
             $table->timestamps();
         });
     }

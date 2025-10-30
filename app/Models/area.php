@@ -23,8 +23,14 @@ class area extends Model
     //     return $this->hasMany(laboratorio::class, 'IdAre', 'IdAre');
     // }
 
-    // public function scopeActivas($query)
-    // {
-    //     return $query->where('EstadoAre', 1);
-    // }
+    public function scopeSearch($query, $search, $idAre)
+    {
+        if (!empty($search)) {
+            $query->where('NombreAre', 'LIKE', '%' . trim($search) . '%');
+        }
+        if (!empty($idAre)) {
+            $query->where('IdAre', $idAre);
+        }
+        return $query;
+    }
 }

@@ -196,8 +196,8 @@
         <tbody>
             <tr>
                 <td>{{ $detalleLab->RealizadoDtl ?? '---' }}</td>
-                <td>{{ $detalleLab->VerificadoDtl ?? '---' }}</td>
-                <td>{{ $detalleLab->ObservaciónDtl ?? '---' }}</td>
+                <td></td>
+                <td></td>
             </tr>
         </tbody>
     </table>

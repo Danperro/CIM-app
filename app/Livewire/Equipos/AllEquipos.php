@@ -11,12 +11,16 @@ use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
-
+use Illuminate\Validation\Rule;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use function Termwind\render;
 
 class AllEquipos extends Component
 {
     use WithPagination;
+    protected $paginationTheme = 'bootstrap';
+    public $idLabFiltro;
     public $idEqo, $idLab, $nombreEqo, $codigoEqo,
         $mostrarPerifericos = [],
         $mostrarEquipos = [],
@@ -37,6 +41,101 @@ class AllEquipos extends Component
         $this->nombreEqo = $equipo->NombreEqo;
         $this->codigoEqo = $equipo->CodigoEqo;
         $this->mostrarPerifericos();
+    }
+    public function updated($prop)
+    {
+        // Si cambian el nombre pero no hay laboratorio, valida solo reglas básicas
+        if ($prop === 'nombreEqo' && empty($this->idLab)) {
+            $this->validateOnly('nombreEqo', [
+                'nombreEqo' => ['bail', 'required', 'string', 'min:3', 'max:100'],
+            ], $this->messages());
+            return;
+        }
+
+        $this->validateOnly($prop, $this->rules(), $this->messages());
+    }
+    public function rules(): array
+    {
+        $isupdate = filled($this->idEqo);
+        return [
+            'nombreEqo' => array_filter([
+                'bail',
+                'required',
+                'string',
+                'min:3',
+                'max:30',
+                $this->idLab ?
+                    Rule::unique('equipo', 'NombreEqo')
+                    ->where(fn($q) => $q->where('IdLab', $this->idLab))
+                    ->when($isupdate, fn($r) => $r->ignore($this->idEqo, 'IdEqo'))
+                    : null
+            ]),
+            'codigoEqo' => ['nullable', 'string', 'max:50', 'regex:/^\d*$/'],
+            'idLab' => ['required', 'integer', 'exists:laboratorio,IdLab'],
+            'perifericosSeleccionados' => ['array', 'size:4'],
+            'perifericosSeleccionados.*.IdPef' => ['required', 'integer', 'distinct', 'exists:periferico,IdPef'],
+            'perifericosSeleccionados.*.IdTpf' => ['required', 'integer', 'in:1,2,3,4']
+        ];
+    }
+    public function messages(): array
+    {
+        return [
+            // nombre
+            'nombreEqo.required' => 'Ingresa el nombre del equipo.',
+            'nombreEqo.min'      => 'El nombre debe tener al menos :min caracteres.',
+            'nombreEqo.max'      => 'El nombre no debe superar :max caracteres.',
+            'nombreEqo.unique'   => 'Ya existe un equipo con ese nombre en este laboratorio.',
+
+            // código
+            'codigoEqo.regex' => 'El código solo puede contener números.',
+            'codigoEqo.max'   => 'El código no debe pasar de :max dígitos.',
+
+            // laboratorio
+            'idLab.required' => 'Selecciona el laboratorio.',
+            'idLab.exists'   => 'El laboratorio seleccionado no existe.',
+
+            // periféricos
+            'perifericosSeleccionados.size' => 'Debes seleccionar exactamente 4 periféricos.',
+            'perifericosSeleccionados.*.IdPef.distinct' => 'Hay periféricos repetidos.',
+            'perifericosSeleccionados.*.IdPef.exists'   => 'Uno de los periféricos ya no existe.',
+            'perifericosSeleccionados.*.IdTpf.in'       => 'Solo se permiten Monitor, CPU, Teclado y Ratón.',
+        ];
+    }
+    public function validationAttributes(): array
+    {
+        // Para que los mensajes automáticos usen estos nombres
+        return [
+            'nombreEqo' => 'nombre',
+            'codigoEqo' => 'código',
+            'idLab'     => 'laboratorio',
+        ];
+    }
+
+    private function assertTiposCompletos(): void
+    {
+        $req = [1 => 'Monitor', 2 => 'CPU', 3 => 'Teclado', 4 => 'Ratón'];
+        $tipos = collect($this->perifericosSeleccionados)->pluck('IdTpf');
+
+        if ($tipos->unique()->count() !== $tipos->count()) {
+            throw ValidationException::withMessages([
+                'perifericosSeleccionados' => 'Solo se permite un periférico por tipo.',
+            ]);
+        }
+
+        $faltan = collect(array_keys($req))->diff($tipos)->values();
+        if ($faltan->isNotEmpty()) {
+            $nombres = $faltan->map(fn($id) => $req[$id])->implode(', ');
+            throw ValidationException::withMessages([
+                'perifericosSeleccionados' => "Te faltan: $nombres.",
+            ]);
+        }
+    }
+
+
+    public function updatedCodigoEqo($val)
+    {
+        $val = preg_replace('/\D+/', '', (string) $val);
+        $this->codigoEqo = ($val === '') ? null : $val;  // <- clave
     }
     public function selectEditarEquipo($id)
     {
@@ -60,27 +159,11 @@ class AllEquipos extends Component
     }
     public function actualizarEquipo()
     {
-        $this->validate([
-            'nombreEqo' => 'required|string',
-            'codigoEqo' => 'required|string',
-            'idLab' => 'required|exists:laboratorio,IdLab',
-            'perifericosSeleccionados' => 'required|array|min:1',
-        ]);
-
         try {
+            $this->codigoEqo = ($this->codigoEqo === '') ? null : $this->codigoEqo; // <- aquí
+            $this->validate($this->rules(), $this->messages());
+            $this->assertTiposCompletos();
             $equipo = equipo::findOrFail($this->idEqo);
-
-            // Validar que no se repita el nombre en el mismo laboratorio
-            $equipoExistente = equipo::where('NombreEqo', $this->nombreEqo)
-                ->where('IdLab', $this->idLab)
-                ->where('IdEqo', '!=', $this->idEqo)
-                ->first();
-
-            if ($equipoExistente) {
-                $this->dispatch('toast-danger', message: 'Ya existe un equipo con ese nombre en este laboratorio');
-                return;
-            }
-
             $equipo->update([
                 'NombreEqo' => $this->nombreEqo,
                 'CodigoEqo' => $this->codigoEqo,
@@ -109,41 +192,31 @@ class AllEquipos extends Component
     public function registrarEquipo()
     {
         try {
-            // ✅ Punto 3: Validar que haya periféricos seleccionados
-            if (count($this->perifericosSeleccionados) == 0) {
-                $this->dispatch('toast-danger', message: 'Debe seleccionar al menos un periférico.');
-                return;
-            }
+            $this->idEqo = null;
+            $this->codigoEqo = ($this->codigoEqo === '') ? null : $this->codigoEqo; // <- aquí
+            $this->validate($this->rules(), $this->messages());
+            $this->assertTiposCompletos();
+  
+            $equipo = equipo::create([
+                'IdLab' => $this->idLab,
+                'NombreEqo' => $this->nombreEqo,
+                'CodigoEqo' => $this->codigoEqo,
+                'EstadoEqo' => true,
+            ]);
 
-            // Validar si ya existe un equipo con mismo nombre en ese laboratorio
-            $equipoex = equipo::where('NombreEqo', $this->nombreEqo)
-                ->where('IdLab', $this->idLab)
-                ->first();
-
-            if (!$equipoex) {
-                $equipo = equipo::create([
-                    'IdLab' => $this->idLab,
-                    'NombreEqo' => $this->nombreEqo,
-                    'CodigoEqo' => $this->codigoEqo,
-                    'EstadoEqo' => true,
+            // Guardar los detalles de periféricos (DTE)
+            foreach ($this->perifericosSeleccionados as $periferico) {
+                detalleequipo::create([
+                    'IdEqo' => $equipo->IdEqo,
+                    'IdPef' => $periferico['IdPef'],
+                    'EstadoDte' => 1,
                 ]);
-
-                // Guardar los detalles de periféricos (DTE)
-                foreach ($this->perifericosSeleccionados as $periferico) {
-                    detalleequipo::create([
-                        'IdEqo' => $equipo->IdEqo,
-                        'IdPef' => $periferico['IdPef'],
-                        'EstadoDte' => 1,
-                    ]);
-                }
-
-                // Aquí emitimos eventos al frontend
-                $this->dispatch('cerrar-modal', modalId: 'kt_modal_create_equipo');
-                $this->dispatch('toast-success', message: 'Equipo registrado correctamente');
-                $this->reset(['nombreEqo', 'codigoEqo', 'idLab', 'idTpf', 'perifericosSeleccionados']);
-            } else {
-                $this->dispatch('toast-danger', message: 'Ya existe un equipo con ese nombre en este laboratorio');
             }
+
+            // Aquí emitimos eventos al frontend
+            $this->dispatch('cerrar-modal', modalId: 'kt_modal_create_equipo');
+            $this->dispatch('toast-success', message: 'Equipo registrado correctamente');
+            $this->reset(['nombreEqo', 'codigoEqo', 'idLab', 'idTpf', 'perifericosSeleccionados']);
         } catch (\Throwable $e) {
             Log::error("Error al registrar equipo", ['mensaje' => $e->getMessage()]);
             $this->dispatch('toast-danger', message: 'Ocurrió un error al registrar el equipo.');
@@ -198,64 +271,61 @@ class AllEquipos extends Component
     public function agregarPeriferico($idPef)
     {
         $perif = periferico::with('tipoperiferico')->find($idPef);
-
         if (!$perif) return;
 
-        // Verificar si ya hay un periférico de ese tipo en los seleccionados
-        $yaExisteTipo = collect($this->perifericosSeleccionados)
-            ->contains(function ($p) use ($perif) {
-                return $p['IdTpf'] == $perif->IdTpf;
-            });
+        // No más de 4
+        if (count($this->perifericosSeleccionados) >= 4) return;
 
-        if ($yaExisteTipo) {
-            $this->dispatch('toast-danger', message: 'Ya has seleccionado un periférico de tipo: ' . $perif->tipoperiferico->NombreTpf);
-            return;
-        }
+        // Canoniza: un solo periférico por TIPO
+        $sel = collect($this->perifericosSeleccionados)->keyBy('IdTpf');
+        // si ya hay de ese tipo, este lo reemplaza; no se duplica
+        $sel[$perif->IdTpf] = $perif->toArray();
+        $this->perifericosSeleccionados = $sel->values()->all();
 
-        // Verificar si ya existe ese mismo periférico por ID
-        if (!collect($this->perifericosSeleccionados)->contains('IdPef', $idPef)) {
-            $this->perifericosSeleccionados[] = $perif->toArray();
-
-            $this->mostrarPerifericosNoAsignados = collect($this->mostrarPerifericosNoAsignados)
-                ->reject(fn($p) => $p->IdPef == $idPef)
-                ->values()
-                ->all();
-        }
+        // Saca el agregado de disponibles
+        $this->mostrarPerifericosNoAsignados = collect($this->mostrarPerifericosNoAsignados)
+            ->reject(fn($p) => $p->IdPef == $idPef)
+            ->values()
+            ->all();
     }
+
 
     public function quitarPeriferico($idPef)
     {
-        // Buscarlo en seleccionados
-        $perif = collect($this->perifericosSeleccionados)
-            ->firstWhere('IdPef', $idPef);
+        $this->perifericosSeleccionados = collect($this->perifericosSeleccionados)
+            ->reject(fn($p) => $p['IdPef'] == $idPef)
+            ->values()
+            ->all();
 
-        if ($perif) {
-            // Quitar de seleccionados
-            $this->perifericosSeleccionados = collect($this->perifericosSeleccionados)
-                ->reject(fn($p) => $p['IdPef'] == $idPef)
+        if ($rep = periferico::with('tipoperiferico')->find($idPef)) {
+            // Evita duplicarlo en disponibles si ya estaba
+            $this->mostrarPerifericosNoAsignados = collect($this->mostrarPerifericosNoAsignados)
+                ->keyBy('IdPef')
+                ->put($idPef, $rep)
                 ->values()
                 ->all();
-
-            // Volver a añadir a disponibles
-            $this->mostrarPerifericosNoAsignados[] = (object) $perif;
         }
     }
+
 
     public function render()
     {
         $laboratorios = laboratorio::get();
-        if (empty($this->idLab)) {
-            $this->mostrarEquipos = equipo::get(); // Todos los equipos
-        } else {
-            $this->mostrarEquipos = equipo::where('IdLab', $this->idLab)->get(); // Filtrar por laboratorio
-        }
+        $equipoquery = equipo::query()
+            ->search($this->query)
+            ->when($this->idLab, fn($q) => $q->where('IdLab', $this->idLab));
+        $this->mostrarEquipos = $equipoquery->get();
         $this->mostrarPerifericos();
         if (empty($this->mostrarPerifericosNoAsignados)) {
             $this->mostrarPerifericosDisponibles();
         }
         $tiposperifericos = tipoperiferico::get();
+        $equipos = equipo::with('laboratorio')
+            ->search($this->query, $this->idLabFiltro)
+            ->orderByRaw('LENGTH(NombreEqo) ASC, NombreEqo ASC')
+            ->paginate(15);
         return view('livewire.equipos.all-equipos', [
-            'equipos' => $this->mostrarEquipos,
+            'equipos' => $equipos,
             'laboratorios' => $laboratorios,
             'mostrarPerifericos' => $this->mostrarPerifericos(),
             'mostrarPerifericosNoAsignados' => $this->mostrarPerifericosNoAsignados,

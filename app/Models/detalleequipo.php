@@ -26,11 +26,8 @@ class detalleequipo extends Model
 
     public function periferico()
     {
+        
         return $this->belongsTo(periferico::class, 'IdPef', 'IdPef');
     }
 
-    // public function scopeActivos($query)
-    // {
-    //     return $query->where('EstadoDte', 1);
-    // }
 }

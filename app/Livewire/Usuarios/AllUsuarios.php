@@ -14,6 +14,9 @@ use Illuminate\Support\Facades\Log;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Auth;
 
 class AllUsuarios extends Component
 {
@@ -36,62 +39,60 @@ class AllUsuarios extends Component
         $usuario = usuario::find($id);
         $this->usernameUsa = $usuario->UsernameUsa;
     }
-    public function cargarLaboratorios()
+    public function limpiarfiltros()
     {
-        $this->laboratoriosPorArea = laboratorio::where('IdAre', $this->idAre)->get();
-        $this->laboratoriosSeleccionados = []; //limpiar
+        $this->reset(['query', 'idRol']);
     }
-
-    public function rulesCrear()
+    public function rules(): array
     {
-        return [
-            'usernameUsa' => 'required|string|unique:usuario,UsernameUsa',
-            'passwordUsa' => 'required|string|min:6',
+        $isUpdate = filled($this->idUsa);
 
-            'nombrePer' => 'required|regex:/^[\pL\s\-]+$/u',
-            'apellidoPaternoPer' => 'required|regex:/^[\pL\s\-]+$/u',
-            'apellidoMaternoPer' => 'required|regex:/^[\pL\s\-]+$/u',
-
-            'correoPer' => 'required|email|unique:persona,CorreoPer',
-            'dniPer' => 'required|regex:/^\d{8}$/|unique:persona,DniPer',
-            'telefonoPer' => ['required', 'regex:/^9\d{8}$/'],
-
-            'idRol' => 'required|exists:rol,IdRol',
-            'idAre' => 'required|exists:area,IdAre',
-            'fechaNacimientoPer' => 'required|date|before:2007-01-01',
-
-            'laboratoriosSeleccionados' => 'required|array|min:1',
-            'laboratoriosSeleccionados.*' => 'exists:laboratorio,IdLab'
-        ];
-    }
-
-    public function rulesEditar()
-    {
         return [
             'usernameUsa' => [
                 'required',
                 'string',
                 Rule::unique('usuario', 'UsernameUsa')->ignore($this->idUsa, 'IdUsa'),
             ],
-            'passwordUsa' => 'nullable|string|min:6',
+            'passwordUsa' => [$isUpdate ? 'nullable' : 'required', 'string', 'min:6'],
 
-            'nombrePer' => 'required|regex:/^[\pL\s\-]+$/u',
-            'apellidoPaternoPer' => 'required|regex:/^[\pL\s\-]+$/u',
-            'apellidoMaternoPer' => 'required|regex:/^[\pL\s\-]+$/u',
+            'nombrePer' => ['required', 'regex:/^[\pL\s\-]+$/u'],
+            'apellidoPaternoPer' => ['required', 'regex:/^[\pL\s\-]+$/u'],
+            'apellidoMaternoPer' => ['required', 'regex:/^[\pL\s\-]+$/u'],
 
-            'correoPer' => 'required|email', // <<< ya sin unique
-            'dniPer' => ['required', 'regex:/^\d{8}$/'], // <<< ya sin unique
-
+            // Usa IGNORE por IdPer para que no tengas que validar “si cambió”
+            'correoPer' => [
+                'required',
+                'email',
+                Rule::unique('persona', 'CorreoPer')->ignore($this->idPer, 'IdPer')
+            ],
+            'dniPer' => [
+                'required',
+                'regex:/^\d{8}$/',
+                Rule::unique('persona', 'DniPer')->ignore($this->idPer, 'IdPer')
+            ],
             'telefonoPer' => ['required', 'regex:/^9\d{8}$/'],
-            'idRol' => 'required|exists:rol,IdRol',
-            'idAre' => 'required|exists:area,IdAre',
-            'fechaNacimientoPer' => 'required|date|before:2007-01-01',
 
-            'laboratoriosSeleccionados' => 'required|array|min:1',
-            'laboratoriosSeleccionados.*' => 'exists:laboratorio,IdLab'
+            'idRol' => ['required', 'exists:rol,IdRol'],
+            'idAre' => ['required', 'exists:area,IdAre'],
+            'fechaNacimientoPer' => ['required', 'date', 'before:' . now()->subYears(18)->toDateString()],
+
+            'laboratoriosSeleccionados'   => ['required', 'array', 'min:1'],
+            'laboratoriosSeleccionados.*' => [
+                Rule::exists('laboratorio', 'IdLab')
+                    ->where(fn($q) => $q->where('IdAre', $this->idAre)),
+            ],
         ];
     }
-
+    public function cargarLaboratorios()
+    {
+        if (empty($this->idAre)) {
+            $this->laboratoriosPorArea = collect();
+            $this->laboratoriosSeleccionados = [];
+            return;
+        }
+        $this->laboratoriosPorArea = laboratorio::where('IdAre', $this->idAre)->get();
+        $this->laboratoriosSeleccionados = []; //limpiar
+    }
 
     protected $messages = [
         'usernameUsa.required' => 'El campo Username es obligatorio.',
@@ -128,55 +129,73 @@ class AllUsuarios extends Component
         'fechaNacimientoPer.before' => 'Debe tener al menos 18 años cumplidos.',
 
         'laboratoriosSeleccionados.required' => 'Debe seleccionar al menos un laboratorio.',
-        'laboratoriosSeleccionados.min' => 'Seleccione al menos un laboratorio.',
+        'laboratoriosSeleccionados.min'      => 'Seleccione al menos un laboratorio.',
+        'laboratoriosSeleccionados.*.exists' => 'Uno o más laboratorios no pertenecen al área seleccionada.',
     ];
 
 
     public function cargarDatosParaEditar($id)
     {
         $this->idUsa = $id;
-        $usuario = usuario::with(['persona', 'detalleusuario'])->findOrFail($id);
+        $usuario = usuario::with(['persona', 'detalleusuario.laboratorio'])->findOrFail($id);
 
         $this->usernameUsa = $usuario->UsernameUsa;
         $this->idRol = $usuario->IdRol;
         $this->passwordUsa = ''; // no se muestra por seguridad
 
         // Datos persona
-        $this->nombrePer = $usuario->persona->NombrePer;
-        $this->apellidoPaternoPer = $usuario->persona->ApellidoPaternoPer;
-        $this->apellidoMaternoPer = $usuario->persona->ApellidoMaternoPer;
-        $this->dniPer = $usuario->persona->DniPer;
-        $this->telefonoPer = $usuario->persona->TelefonoPer;
-        $this->correoPer = $usuario->persona->CorreoPer;
-        $this->fechaNacimientoPer = $usuario->persona->FechaNacimientoPer;
+        $per = $usuario->persona;
+        $this->nombrePer           = $per->NombrePer;
+        $this->apellidoPaternoPer  = $per->ApellidoPaternoPer;
+        $this->apellidoMaternoPer  = $per->ApellidoMaternoPer;
+        $this->dniPer              = $per->DniPer;
+        $this->telefonoPer         = $per->TelefonoPer;
+        $this->correoPer           = $per->CorreoPer;
+        $this->fechaNacimientoPer  = $per->FechaNacimientoPer;
 
-        // Área y laboratorios
-        $this->idAre = optional($usuario->detalleusuario->first()->laboratorio)->IdAre;
+        $this->idPer = $usuario->persona->IdPer; // <- clave para unique con ignore
+
+        // área + labs
+        $primerDet = $usuario->detalleusuario()->with('laboratorio')->first();
+        $this->idAre = $primerDet?->laboratorio?->IdAre;
         $this->cargarLaboratorios();
-        $this->laboratoriosSeleccionados = $usuario->detalleusuario->pluck('IdLab')->toArray();
+        $this->laboratoriosSeleccionados = $usuario->detalleusuario()->pluck('IdLab')->toArray() ?? [];
+    }
+
+    public function updated($prop)
+    {
+        if (in_array($prop, ['usernameUsa', 'nombrePer', 'apellidoPaternoPer', 'apellidoMaternoPer'])) {
+            $this->$prop = trim((string)$this->$prop);
+        }
+        if ($prop === 'correoPer') {
+            $this->correoPer = strtolower(trim((string)$this->correoPer));
+        }
+
+        // Si cambian el área, recarga la lista y limpia selección
+        if ($prop === 'idAre') {
+            $this->cargarLaboratorios();
+        }
+        if ($prop === 'passwordUsa') {
+            $this->passwordUsa = trim((string) $this->passwordUsa);
+            if ($this->passwordUsa === '') {
+                $this->passwordUsa = null;
+            }
+        }
+        // Validación en vivo solo del campo modificado
+        $this->validateOnly($prop, $this->rules(), $this->messages);
     }
 
     public function actualizarUsuario()
     {
-        $this->validate($this->rulesEditar());
+        $pwd = trim((string) $this->passwordUsa);
+        $this->passwordUsa = ($pwd === '') ? null : $pwd;
+
+        $this->validate($this->rules(), $this->messages);
 
         try {
             $usuario = usuario::findOrFail($this->idUsa);
             $persona = $usuario->persona;
 
-            // Validar solo si se cambió el correo
-            if ($this->correoPer !== $persona->CorreoPer) {
-                $this->validateOnly('correoPer', [
-                    'correoPer' => 'required|email|unique:persona,CorreoPer',
-                ]);
-            }
-
-            // Validar solo si se cambió el DNI
-            if ($this->dniPer !== $persona->DniPer) {
-                $this->validateOnly('dniPer', [
-                    'dniPer' => 'required|regex:/^\d{8}$/|unique:persona,DniPer',
-                ]);
-            }
 
             // Actualizar persona
             $persona->update([
@@ -192,9 +211,10 @@ class AllUsuarios extends Component
             // Actualizar usuario
             $usuario->IdRol = $this->idRol;
             $usuario->UsernameUsa = $this->usernameUsa;
-            if (!empty($this->passwordUsa)) {
-                $usuario->PasswordUsa = bcrypt($this->passwordUsa);
+            if (!is_null($this->passwordUsa)) {
+                $usuario->PasswordUsa = Hash::make($this->passwordUsa);
             }
+
             $usuario->save();
 
             // Actualizar laboratorios
@@ -224,54 +244,75 @@ class AllUsuarios extends Component
         }
     }
 
+    public function toggleEstado(int $idUsa): void
+    {
+        // Evita que alguien se suicide bloqueándose a sí mismo
+        if (Auth::user()->IdUsa === $idUsa) {
+            $this->dispatch('toast-danger', message: 'No puedes cambiar tu propio estado.');
+            return;
+        }
+
+        $user = usuario::findOrFail($idUsa);
+
+        $user->EstadoUsa = $user->EstadoUsa ? 0 : 1;
+        $user->save();
+
+        $this->dispatch(
+            'toast-success',
+            title: 'Estado actualizado',
+            message: $user->EstadoUsa ? 'Usuario activado' : 'Usuario desactivado'
+        );
+        // No hace falta más: Livewire volverá a ejecutar render() y refrescará la tabla
+    }
+
 
     public function registrarUsuario()
     {
-        $this->validate($this->rulesCrear());
+        $this->idUsa = null;
+        $this->validate($this->rules(), $this->messages);
+
+        // Opcional: normalizar antes de guardar
+        $this->dniPer = preg_replace('/\D+/', '', (string)$this->dniPer);
+        $this->telefonoPer = preg_replace('/\D+/', '', (string)$this->telefonoPer);
 
         try {
-            $persona = persona::create([
-                'NombrePer' => $this->nombrePer,
-                'ApellidoPaternoPer' => $this->apellidoPaternoPer,
-                'ApellidoMaternoPer' => $this->apellidoMaternoPer,
-                'FechaNacimientoPer' => $this->fechaNacimientoPer,
-                'DniPer' => $this->dniPer,
-                'TelefonoPer' => $this->telefonoPer,
-                'CorreoPer' => $this->correoPer,
-                'EstadoPer' => 1
-            ]);
-            $usuario = usuario::create([
-                'IdRol' => $this->idRol,
-                'UsernameUsa' => $this->usernameUsa,
-                'PasswordUsa' => bcrypt($this->passwordUsa),
-                'IdPer' => $persona->IdPer,
-                'EstadoUsa' => 1,
-            ]);
-            foreach ($this->laboratoriosSeleccionados as $idLab) {
-                detalleusuario::create([
-                    'IdUsa' => $usuario->IdUsa,
-                    'IdLab' => $idLab,
-                    'EstadoDtu' => 1
+            DB::transaction(function () {
+                $persona = persona::create([
+                    'NombrePer'          => $this->nombrePer,
+                    'ApellidoPaternoPer' => $this->apellidoPaternoPer,
+                    'ApellidoMaternoPer' => $this->apellidoMaternoPer,
+                    'FechaNacimientoPer' => $this->fechaNacimientoPer,
+                    'DniPer'             => $this->dniPer,
+                    'TelefonoPer'        => $this->telefonoPer,
+                    'CorreoPer'          => $this->correoPer,
+                    'EstadoPer'          => 1,
                 ]);
-            }
 
+                $usuario = usuario::create([
+                    'IdRol'       => $this->idRol,
+                    'UsernameUsa' => $this->usernameUsa,
+                    'PasswordUsa' => Hash::make($this->passwordUsa), // mejor que bcrypt()
+                    'IdPer'       => $persona->IdPer,
+                    'EstadoUsa'   => 1,
+                ]);
 
-            // Solo cerrar modal y limpiar si todo fue exitoso
+                foreach ($this->laboratoriosSeleccionados as $idLab) {
+                    detalleusuario::create([
+                        'IdUsa'     => $usuario->IdUsa,
+                        'IdLab'     => $idLab,
+                        'EstadoDtu' => 1,
+                    ]);
+                }
+            });
+
             $this->dispatch('cerrar-modal', modalId: 'kt_modal_create_usuario');
             $this->dispatch('toast-success', [
-                'title' => '¡Usuario registrado correctamente!',
-                'message' => 'El usuario ha sido creado exitosamente en el sistema.'
+                'title'   => '¡Usuario registrado correctamente!',
+                'message' => 'El usuario ha sido creado exitosamente en el sistema.',
             ]);
-
             $this->limpiar();
         } catch (\Throwable $e) {
-            Log::error("Error al registrar usuario", [
-                'mensaje' => $e->getMessage(),
-                'linea' => $e->getLine(),
-                'archivo' => $e->getFile()
-            ]);
-
-            // Agregar error personalizado si es necesario
+            Log::error('Error al registrar usuario', ['mensaje' => $e->getMessage(), 'linea' => $e->getLine()]);
             $this->addError('general', 'Ocurrió un error al registrar el usuario. Por favor, intente nuevamente.');
         }
     }
@@ -285,7 +326,7 @@ class AllUsuarios extends Component
                     usuario::where('IdUsa', $this->idUsa)->delete();
                     // Cerrar el modal y mostrar mensaje de éxito
                     $this->dispatch('cerrar-modal', modalId: 'kt_modal_eliminar_usuario');
-                    $this->dispatch('toast-success', message: 'Equipo eliminado con éxito');
+                    $this->dispatch('toast-success', message: 'Usuario eliminado con éxito');
 
                     // Limpiar los datos
                     $this->limpiar();
@@ -301,22 +342,10 @@ class AllUsuarios extends Component
         $roles = rol::get();
         $areas = area::get();
         $laboratorios = laboratorio::get();
-        $queryUsuarios = usuario::with(['persona', 'rol']);
+        $usuarios = usuario::with(['persona', 'rol'])
+            ->search($this->query, $this->idRol) // ← usa el scope
+            ->paginate(10);
 
-        if (!empty($this->query)) {
-            $queryUsuarios->whereHas('persona', function ($q) {
-                $q->where('NombrePer', 'like', '%' . $this->query . '%')
-                    ->orWhere('ApellidoPaternoPer', 'like', '%' . $this->query . '%')
-                    ->orWhere('ApellidoMaternoPer', 'like', '%' . $this->query . '%');
-            })->orWhere('UsernameUsa', 'like', '%' . $this->query . '%');
-        }
-
-        // Filtro por rol si está seleccionado
-        if (!empty($this->idRol)) {
-            $queryUsuarios->where('IdRol', $this->idRol);
-        }
-
-        $usuarios = $queryUsuarios->paginate(10);
         return view('livewire.usuarios.all-usuarios', [
             'usuarios' => $usuarios,
             'roles' => $roles,

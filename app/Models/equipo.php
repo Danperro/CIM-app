@@ -25,19 +25,27 @@ class equipo extends Model
         return $this->belongsTo(laboratorio::class, 'IdLab', 'IdLab');
     }
 
-    public function scopeSearch($query, $search)
+    public function scopeSearch($query, $search=null,$idLab=null)
     {
-        if ($search == null) {
-            return $query;
+        if (!empty($search)) {
+            return $query->where(function ($q) use ($search) {
+                $q->where('NombreEqo', 'LIKE', '%' . trim($search) . '%')
+                    ->orWhere('CodigoEqo', 'LIKE', '%' . trim($search) . '%');
+            });
         }
-        return $query->where('NombreEqo', 'LIKE', '%' . trim($search) . '%')
-            ->orWhere('CodigoEqo', 'LIKE', '%' . trim($search) . '%');
+        if(!empty($idLab)){
+            $query->where('IdLab',$idLab);
+        }
+        return $query;
     }
 
-
-    // Relaciones futuras
-    // public function detalles()
-    // {
-    //     return $this->hasMany(detalleequipo::class, 'IdEqo', 'IdEqo');
-    // }
+    public function perifericos()
+    {
+        // ajusta claves si tus nombres son distintos
+        return $this->belongsToMany(periferico::class, 'detalleequipo', 'IdEqo', 'IdPef');
+    }
+    public function detalles()
+    {
+        return $this->hasMany(detalleEquipo::class, 'IdEqo', 'IdEqo');
+    }
 }

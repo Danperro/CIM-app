@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Database\Eloquent\Builder;
 
 class usuario extends Authenticatable
 {
@@ -28,17 +29,23 @@ class usuario extends Authenticatable
         return $this->PasswordUsa;
     }
 
-    public function getAuthIdentifierName()
+    public function scopeSearch($query, $search, $idRol)
     {
-        return 'UsernameUsa';
-    }
+        $query->when($search, function ($query) use ($search) {
+            $s = mb_strtolower(trim($search), 'UTF-8');
+            $query->where(function ($querylimpio) use ($s) {
+                $querylimpio->whereRaw('LOWER(`UsernameUsa`) LIKE ?', ["%{$s}%"])
+                    // Relación persona: nombre y apellidos
+                    ->orWhereHas('persona', function (Builder $p) use ($s) {
+                        $p->whereRaw('LOWER(`NombrePer`) LIKE ?', ["%{$s}%"])
+                            ->orWhereRaw('LOWER(`ApellidoPaternoPer`) LIKE ?', ["%{$s}%"])
+                            ->orWhereRaw('LOWER(`ApellidoMaternoPer`) LIKE ?', ["%{$s}%"]);
+                    });
+            });
+        });
+        $query->when($idRol, fn($query) => $query->where('IdRol', $idRol));
 
-    public function scopeSearch($query, $search)
-    {
-        if ($search == null) {
-            return $query;
-        }
-        return $query->where('NombreUsa', 'LIKE', '%' . trim($search) . '%');
+        return $query;
     }
     // Relaciones
     public function rol()
@@ -52,6 +59,6 @@ class usuario extends Authenticatable
     }
     public function detalleusuario()
     {
-        return $this->hasOne(detalleusuario::class, 'IdUsa', 'IdUsa');
+        return $this->hasMany(detalleusuario::class, 'IdUsa', 'IdUsa');
     }
 }

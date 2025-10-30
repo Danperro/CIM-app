@@ -24,8 +24,14 @@ class laboratorio extends Model
         return $this->belongsTo(area::class, 'IdAre', 'IdAre');
     }
 
-    // public function scopeActivos($query)
-    // {
-    //     return $query->where('EstadoLab', 1);
-    // }
+    public function scopeSearch($query, $search, $idAre = null)
+    {
+        if (!empty($search)) {
+            $query->where('NombreLab', 'LIKE', '%' . trim($search) . '%');
+        }
+        if (!empty($idAre)) {
+            $query->where('IdAre', $idAre);
+        }
+        return $query;
+    }
 }
